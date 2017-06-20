@@ -18,6 +18,14 @@
 #include "Connection.h"
 #include "async.h"
 
+#ifdef SW_USE_MALLOC_TRIM
+#include <malloc.h>
+#endif
+
+#ifdef SW_COROUTINE
+#include "coroutine.h"
+#endif
+
 static void swReactor_onTimeout_and_Finish(swReactor *reactor);
 static void swReactor_onTimeout(swReactor *reactor);
 static void swReactor_onFinish(swReactor *reactor);
@@ -179,10 +187,23 @@ static void swReactor_onTimeout_and_Finish(swReactor *reactor)
     {
         swTimer_select(&SwooleG.timer);
     }
+
+#ifdef SW_COROUTINE
+    //coro timeout
+    if (!swIsMaster()) {
+        coro_handle_timeout();
+    }
+#endif
+
     //server master
     if (SwooleG.serv && SwooleTG.update_time)
     {
         swoole_update_time();
+        int32_t timeout_msec = SwooleG.main_reactor->timeout_msec;
+        if (timeout_msec < 0 || timeout_msec > 1000)
+        {
+            SwooleG.main_reactor->timeout_msec = 1000;
+        }
     }
     //server worker
     swWorker *worker = SwooleWG.worker;
@@ -210,8 +231,13 @@ static void swReactor_onTimeout_and_Finish(swReactor *reactor)
             reactor->running = 0;
         }
     }
+
 #ifdef SW_USE_MALLOC_TRIM
-    malloc_trim();
+    if (reactor->last_mallc_trim_time < SwooleGS->now - SW_MALLOC_TRIM_INTERVAL)
+    {
+        malloc_trim(SW_MALLOC_TRIM_PAD);
+        reactor->last_mallc_trim_time = SwooleGS->now;
+    }
 #endif
 }
 

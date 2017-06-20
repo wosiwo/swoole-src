@@ -28,8 +28,8 @@ static int swClient_tcp_send_async(swClient *cli, char *data, int length, int fl
 static int swClient_tcp_pipe(swClient *cli, int write_fd, int flags);
 static int swClient_udp_send(swClient *cli, char *data, int length, int flags);
 
-static int swClient_tcp_sendfile_sync(swClient *cli, char *filename, off_t offset);
-static int swClient_tcp_sendfile_async(swClient *cli, char *filename, off_t offset);
+static int swClient_tcp_sendfile_sync(swClient *cli, char *filename, off_t offset, size_t length);
+static int swClient_tcp_sendfile_async(swClient *cli, char *filename, off_t offset, size_t length);
 static int swClient_tcp_recv_no_buffer(swClient *cli, char *data, int len, int flags);
 static int swClient_udp_connect(swClient *cli, char *host, int port, double _timeout, int udp_connect);
 static int swClient_udp_recv(swClient *cli, char *data, int len, int waitall);
@@ -256,17 +256,19 @@ static int swClient_inet_addr(swClient *cli, char *host, int port)
         cli->server_addr.addr.un.sun_family = AF_UNIX;
         strncpy(cli->server_addr.addr.un.sun_path, host, sizeof(cli->server_addr.addr.un.sun_path) - 1);
         cli->server_addr.addr.un.sun_path[sizeof(cli->server_addr.addr.un.sun_path) - 1] = 0;
-        cli->server_addr.len = strlen(cli->server_addr.addr.un.sun_path);
+        cli->server_addr.len = sizeof(cli->server_addr.addr.un.sun_path);
         return SW_OK;
     }
     else
     {
         return SW_ERR;
     }
+#ifndef SW_COROUTINE
     if (cli->async)
     {
         swWarn("DNS lookup will block the process. Please use swoole_async_dns_lookup.");
     }
+#endif
     if (swoole_gethostbyname(cli->_sock_domain, host, s_addr) < 0)
     {
         return SW_ERR;
@@ -589,9 +591,9 @@ static int swClient_tcp_send_sync(swClient *cli, char *data, int length, int fla
     return written;
 }
 
-static int swClient_tcp_sendfile_sync(swClient *cli, char *filename, off_t offset)
+static int swClient_tcp_sendfile_sync(swClient *cli, char *filename, off_t offset, size_t length)
 {
-    if (swSocket_sendfile_sync(cli->socket->fd, filename, offset, cli->timeout) < 0)
+    if (swSocket_sendfile_sync(cli->socket->fd, filename, offset, length, cli->timeout) < 0)
     {
         SwooleG.error = errno;
         return SW_ERR;
@@ -599,9 +601,9 @@ static int swClient_tcp_sendfile_sync(swClient *cli, char *filename, off_t offse
     return SW_OK;
 }
 
-static int swClient_tcp_sendfile_async(swClient *cli, char *filename, off_t offset)
+static int swClient_tcp_sendfile_async(swClient *cli, char *filename, off_t offset, size_t length)
 {
-    if (swConnection_sendfile(cli->socket, filename, offset) < 0)
+    if (swConnection_sendfile(cli->socket, filename, offset, length) < 0)
     {
         SwooleG.error = errno;
         return SW_ERR;

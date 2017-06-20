@@ -16,7 +16,6 @@
 
 #include "php_swoole.h"
 #include "socks5.h"
-#include "module.h"
 
 #include "ext/standard/basic_functions.h"
 
@@ -207,6 +206,7 @@ ZEND_END_ARG_INFO()
 ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_client_sendfile, 0, 0, 1)
     ZEND_ARG_INFO(0, filename)
     ZEND_ARG_INFO(0, offset)
+    ZEND_ARG_INFO(0, length)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_swoole_client_sendto, 0, 0, 3)
@@ -415,7 +415,7 @@ static void client_check_ssl_setting(swClient *cli, zval *zset TSRMLS_DC)
     if (php_swoole_array_get_value(vht, "ssl_cert_file", v))
     {
         convert_to_string(v);
-        cli->ssl_cert_file = strdup(Z_STRVAL_P(v));
+        cli->ssl_cert_file = sw_strdup(Z_STRVAL_P(v));
         if (access(cli->ssl_cert_file, R_OK) < 0)
         {
             swoole_php_fatal_error(E_ERROR, "ssl cert file[%s] not found.", cli->ssl_cert_file);
@@ -425,7 +425,7 @@ static void client_check_ssl_setting(swClient *cli, zval *zset TSRMLS_DC)
     if (php_swoole_array_get_value(vht, "ssl_key_file", v))
     {
         convert_to_string(v);
-        cli->ssl_key_file = strdup(Z_STRVAL_P(v));
+        cli->ssl_key_file = sw_strdup(Z_STRVAL_P(v));
         if (access(cli->ssl_key_file, R_OK) < 0)
         {
             swoole_php_fatal_error(E_ERROR, "ssl key file[%s] not found.", cli->ssl_key_file);
@@ -533,7 +533,7 @@ void php_swoole_client_check_setting(swClient *cli, zval *zset TSRMLS_DC)
         {
             if (Z_TYPE_P(v) == IS_STRING)
             {
-                swProtocol_length_function func = swModule_get_global_function(Z_STRVAL_P(v), Z_STRLEN_P(v));
+                swProtocol_length_function func = swoole_get_function(Z_STRVAL_P(v), Z_STRLEN_P(v));
                 if (func != NULL)
                 {
                     cli->protocol.get_package_length = func;
@@ -648,7 +648,7 @@ void php_swoole_client_check_setting(swClient *cli, zval *zset TSRMLS_DC)
         convert_to_string(v);
         cli->socks5_proxy = emalloc(sizeof(swSocks5));
         bzero(cli->socks5_proxy, sizeof(swSocks5));
-        cli->socks5_proxy->host = strdup(Z_STRVAL_P(v));
+        cli->socks5_proxy->host = sw_strdup(Z_STRVAL_P(v));
         cli->socks5_proxy->dns_tunnel = 1;
 
         if (php_swoole_array_get_value(vht, "socks5_port", v))
@@ -666,6 +666,7 @@ void php_swoole_client_check_setting(swClient *cli, zval *zset TSRMLS_DC)
             convert_to_string(v);
             cli->socks5_proxy->username = Z_STRVAL_P(v);
             cli->socks5_proxy->l_username = Z_STRLEN_P(v);
+            cli->socks5_proxy->method = 0x02;
         }
         if (php_swoole_array_get_value(vht, "socks5_password", v))
         {
@@ -682,7 +683,7 @@ void php_swoole_client_check_setting(swClient *cli, zval *zset TSRMLS_DC)
         {
             convert_to_long(v);
             cli->http_proxy = ecalloc(1,sizeof(struct _http_proxy));
-            cli->http_proxy->proxy_host = strdup(host);
+            cli->http_proxy->proxy_host = sw_strdup(host);
             cli->http_proxy->proxy_port = Z_LVAL_P(v);
         }
         else
@@ -832,15 +833,15 @@ void php_swoole_client_free(zval *zobject, swClient *cli TSRMLS_DC)
     {
         if (swHashMap_del(php_sw_long_connections, cli->server_str, cli->server_strlen))
         {
-            swoole_php_fatal_error(E_WARNING, "delete from hashtable failed.");
+            swoole_php_fatal_error(E_WARNING, "delete key[%s] from hashtable failed.", cli->server_str);
         }
-        efree(cli->server_str);
+        sw_free(cli->server_str);
         swClient_free(cli);
         pefree(cli, 1);
     }
     else
     {
-        efree(cli->server_str);
+        sw_free(cli->server_str);
         swClient_free(cli);
         efree(cli);
     }
@@ -935,7 +936,7 @@ swClient* php_swoole_client_new(zval *object, char *host, int host_len, int port
         }
 
         //don't forget free it
-        cli->server_str = estrdup(conn_key);
+        cli->server_str = sw_strndup(conn_key, conn_key_len);
         cli->server_strlen = conn_key_len;
     }
 
@@ -1282,8 +1283,9 @@ static PHP_METHOD(swoole_client, sendfile)
     char *file;
     zend_size_t file_len;
     long offset = 0;
+    long length = 0;
 
-    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s|l", &file, &file_len, &offset) == FAILURE)
+    if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "s|ll", &file, &file_len, &offset, &length) == FAILURE)
     {
         return;
     }
@@ -1306,7 +1308,7 @@ static PHP_METHOD(swoole_client, sendfile)
     }
     //clear errno
     SwooleG.error = 0;
-    int ret = cli->sendfile(cli, file, offset);
+    int ret = cli->sendfile(cli, file, offset, length);
     if (ret < 0)
     {
         SwooleG.error = errno;

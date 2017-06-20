@@ -163,21 +163,37 @@ typedef unsigned long ulong_t;
 #define SW_STRL(s)             s, sizeof(s)
 #define SW_START_SLEEP         usleep(100000)  //sleep 1s,wait fork and pthread_create
 
-#ifdef SW_MALLOC_DEBUG
-#define sw_malloc(__size)      malloc(__size);swWarn("malloc(%ld)", __size)
-#define sw_free(ptr)           if(ptr){free(ptr);ptr=NULL;swWarn("free");}
+#ifdef SW_USE_JEMALLOC
+#include <jemalloc/jemalloc.h>
+#define sw_malloc              je_malloc
+#define sw_free                je_free
+#define sw_calloc              je_calloc
+#define sw_realloc             je_realloc
 #else
 #define sw_malloc              malloc
-#define sw_free(ptr)           if(ptr){free(ptr);ptr=NULL;}
-#endif
-
+#define sw_free                free
 #define sw_calloc              calloc
 #define sw_realloc             realloc
+#endif
 
 #if defined(SW_USE_JEMALLOC) || defined(SW_USE_TCMALLOC)
-#define sw_strdup_free(str)
+static sw_inline char* sw_strdup(const char *s)
+{
+    size_t l = strlen(s) + 1;
+    char *p = sw_malloc(l);
+    memcpy(p, s, l);
+    return p;
+}
+static sw_inline char* sw_strndup(const char *s, size_t n)
+{
+    char *p = sw_malloc(n + 1);
+    strncpy(p, s, n);
+    p[n] = '\0';
+    return p;
+}
 #else
-#define sw_strdup_free(str)     free(str)
+#define sw_strdup              strdup
+#define sw_strndup             strndup
 #endif
 
 #define METHOD_DEF(class,name,...)  class##_##name(class *object, ##__VA_ARGS__)
@@ -539,6 +555,8 @@ typedef struct _swConnection
      */
     time_t last_time;
 
+    uint16_t timewheel_index;
+
     /**
      * bind uid
      */
@@ -703,6 +721,22 @@ typedef struct _swSendData
     uint32_t length;
     char *data;
 } swSendData;
+
+typedef struct
+{
+    off_t offset;
+    size_t length;
+    char filename[0];
+} swSendFile_request;
+
+//------------------TimeWheel--------------------
+typedef struct
+{
+    uint16_t current;
+    uint16_t size;
+    swHashMap **wheel;
+
+} swTimeWheel;
 
 typedef void * (*swThreadStartFunc)(void *);
 typedef int (*swHandle)(swEventData *buf);
@@ -1196,6 +1230,8 @@ void swoole_update_time(void);
 double swoole_microtime(void);
 void swoole_rtrim(char *str, int len);
 void swoole_redirect_stdout(int new_fd);
+int swoole_add_function(const char *name, void* func);
+void* swoole_get_function(char *name, uint32_t length);
 
 static sw_inline uint64_t swoole_hton64(uint64_t host)
 {
@@ -1237,7 +1273,7 @@ int swSocket_sendto_blocking(int fd, void *__buf, size_t __n, int flag, struct s
 int swSocket_set_buffer_size(int fd, int buffer_size);
 int swSocket_udp_sendto(int server_sock, char *dst_ip, int dst_port, char *data, uint32_t len);
 int swSocket_udp_sendto6(int server_sock, char *dst_ip, int dst_port, char *data, uint32_t len);
-int swSocket_sendfile_sync(int sock, char *filename, off_t offset, double timeout);
+int swSocket_sendfile_sync(int sock, char *filename, off_t offset, size_t length, double timeout);
 int swSocket_write_blocking(int __fd, void *__data, int __len);
 
 static sw_inline int swWaitpid(pid_t __pid, int *__stat_loc, int __options)
@@ -1320,6 +1356,7 @@ struct _swReactor
     uint32_t max_event_num;
 
     uint32_t check_timer :1;
+
     uint32_t running :1;
 
     /**
@@ -1343,6 +1380,16 @@ struct _swReactor
 	uint16_t flag; //flag
 
     uint32_t max_socket;
+
+#ifdef SW_USE_MALLOC_TRIM
+    time_t last_mallc_trim_time;
+#endif
+
+#ifdef SW_USE_TIMEWHEEL
+    swTimeWheel *timewheel;
+    uint16_t heartbeat_interval;
+    time_t last_heartbeat_time;
+#endif
 
     /**
      * for thread
@@ -1710,6 +1757,7 @@ typedef struct _swTimer_node
     int64_t exec_msec;
     uint32_t interval;
     long id;
+    int type;                 //0 normal node 1 node for client_coro
     uint8_t remove :1;
 } swTimer_node;
 
@@ -1744,6 +1792,14 @@ int swTimer_select(swTimer *timer);
 int swSystemTimer_init(int msec, int use_pipe);
 void swSystemTimer_signal_handler(int sig);
 int swSystemTimer_event_handler(swReactor *reactor, swEvent *event);
+
+swTimeWheel* swTimeWheel_new(uint16_t size);
+void swTimeWheel_free(swTimeWheel *tw);
+void swTimeWheel_forward(swTimeWheel *tw, swReactor *reactor);
+void swTimeWheel_add(swTimeWheel *tw, swConnection *conn);
+void swTimeWheel_update(swTimeWheel *tw, swConnection *conn);
+void swTimeWheel_remove(swTimeWheel *tw, swConnection *conn);
+#define swTimeWheel_new_index(tw)   (tw->current == 0 ? tw->size - 1 : tw->current - 1)
 //--------------------------------------------------------------
 //Share Memory
 typedef struct
@@ -1794,6 +1850,11 @@ typedef struct
 
     int max_request;
 
+#ifdef SW_COROUTINE
+    swLinkedList *coro_timeout_list;
+    swLinkedList *delayed_coro_timeout_list;
+#endif
+
     swString **buffer_input;
     swString **buffer_output;
     swWorker *worker;
@@ -1833,6 +1894,7 @@ typedef struct
     uint8_t socket_dontwait :1;
     uint8_t dns_lookup_random :1;
     uint8_t use_async_resolver :1;
+
 
     /**
      * Timer used pipe
@@ -1892,6 +1954,7 @@ typedef struct
 
     char *dns_server_v4;
     char *dns_server_v6;
+    double dns_cache_refresh_time;
 
     swLock lock;
     swString *module_stack;

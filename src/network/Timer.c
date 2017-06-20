@@ -19,7 +19,7 @@
 static int swReactorTimer_init(long msec);
 static int swReactorTimer_set(swTimer *timer, long exec_msec);
 
-static int swReactorTimer_now(struct timeval *time)
+int swReactorTimer_now(struct timeval *time)
 {
 #if defined(SW_USE_MONOTONIC_TIME) && defined(CLOCK_MONOTONIC)
     struct timespec _now;
@@ -40,7 +40,7 @@ static int swReactorTimer_now(struct timeval *time)
     return SW_OK;
 }
 
-static sw_inline int64_t swTimer_get_relative_msec()
+sw_inline int64_t swTimer_get_relative_msec()
 {
     struct timeval now;
     if (swReactorTimer_now(&now) < 0)
@@ -127,6 +127,7 @@ swTimer_node* swTimer_add(swTimer *timer, int _msec, int interval, void *data)
     }
 
     tnode->data = data;
+    tnode->type = 0; 
     tnode->exec_msec = now_msec + _msec;
     tnode->interval = interval ? _msec : 0;
     tnode->remove = 0;
@@ -207,7 +208,6 @@ int swTimer_select(swTimer *timer)
         }
         timer->num --;
         swHeap_pop(timer->heap);
-        sw_free(tnode);
     }
 
     if (!tnode || !tmp)
