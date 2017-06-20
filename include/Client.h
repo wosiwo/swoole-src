@@ -52,6 +52,7 @@ typedef struct _swClient
 {
     int id;
     int type;
+    long timeout_id; //timeout node id
     int _sock_type;
     int _sock_domain;
     int _protocol;
@@ -126,7 +127,7 @@ typedef struct _swClient
 
     int (*connect)(struct _swClient *cli, char *host, int port, double _timeout, int sock_flag);
     int (*send)(struct _swClient *cli, char *data, int length, int flags);
-    int (*sendfile)(struct _swClient *cli, char *filename, off_t offset);
+    int (*sendfile)(struct _swClient *cli, char *filename, off_t offset, size_t length);
     int (*recv)(struct _swClient *cli, char *data, int len, int flags);
     int (*pipe)(struct _swClient *cli, int write_fd, int is_session_id);
     int (*close)(struct _swClient *cli);

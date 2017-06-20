@@ -33,7 +33,6 @@ static PHP_METHOD(swoole_mysql, escape);
 static PHP_METHOD(swoole_mysql, query);
 static PHP_METHOD(swoole_mysql, close);
 static PHP_METHOD(swoole_mysql, on);
-static PHP_METHOD(swoole_mysql, getBuffer);
 
 static zend_class_entry swoole_mysql_ce;
 static zend_class_entry *swoole_mysql_class_entry_ptr;
@@ -291,16 +290,11 @@ static const zend_function_entry swoole_mysql_methods[] =
     PHP_ME(swoole_mysql, escape, arginfo_swoole_mysql_escape, ZEND_ACC_PUBLIC)
 #endif
     PHP_ME(swoole_mysql, query, arginfo_swoole_mysql_query, ZEND_ACC_PUBLIC)
-    PHP_ME(swoole_mysql, getBuffer, arginfo_swoole_void, ZEND_ACC_PUBLIC)
     PHP_ME(swoole_mysql, close, arginfo_swoole_void, ZEND_ACC_PUBLIC)
     PHP_ME(swoole_mysql, on, arginfo_swoole_mysql_on, ZEND_ACC_PUBLIC)
     PHP_FE_END
 };
 
-static int mysql_request(swString *sql, swString *buffer);
-static int mysql_handshake(mysql_connector *connector, char *buf, int len);
-static int mysql_get_result(mysql_connector *connector, char *buf, int len);
-static int mysql_get_charset(char *name);
 static void mysql_client_free(mysql_client *client, zval* zobject);
 
 static void mysql_client_free(mysql_client *client, zval* zobject)
@@ -337,7 +331,7 @@ void swoole_mysql_init(int module_number TSRMLS_DC)
     SWOOLE_CLASS_ALIAS(swoole_mysql_exception, "Swoole\\MySQL\\Exception");
 }
 
-static int mysql_request(swString *sql, swString *buffer)
+int mysql_request(swString *sql, swString *buffer)
 {
     bzero(buffer->str, 5);
     //length
@@ -348,7 +342,7 @@ static int mysql_request(swString *sql, swString *buffer)
     return swString_append(buffer, sql);
 }
 
-static int mysql_get_charset(char *name)
+int mysql_get_charset(char *name)
 {
     const mysql_charset *c = swoole_mysql_charsets;
     while (c[0].nr != 0)
@@ -362,7 +356,7 @@ static int mysql_get_charset(char *name)
     return -1;
 }
 
-static int mysql_get_result(mysql_connector *connector, char *buf, int len)
+int mysql_get_result(mysql_connector *connector, char *buf, int len)
 {
     char *tmp = buf;
     int packet_length = mysql_uint3korr(tmp);
@@ -413,7 +407,7 @@ string[$len]   auth-plugin-data-part-2 ($len=MAX(13, length of auth-plugin-data 
 string[NUL]    auth-plugin name
   }
  */
-static int mysql_handshake(mysql_connector *connector, char *buf, int len)
+int mysql_handshake(mysql_connector *connector, char *buf, int len)
 {
     char *tmp = buf;
 
@@ -524,37 +518,45 @@ static int mysql_handshake(mysql_connector *connector, char *buf, int len)
     tmp[connector->user_len] = '\0';
     tmp += (connector->user_len + 1);
 
-    //auth-response
-    char hash_0[20];
-    bzero(hash_0, sizeof(hash_0));
-    php_swoole_sha1(connector->password, connector->password_len, (uchar *) hash_0);
-
-    char hash_1[20];
-    bzero(hash_1, sizeof(hash_1));
-    php_swoole_sha1(hash_0, sizeof(hash_0), (uchar *) hash_1);
-
-    char str[40];
-    memcpy(str, request.auth_plugin_data, 20);
-    memcpy(str + 20, hash_1, 20);
-
-    char hash_2[20];
-    php_swoole_sha1(str, sizeof(str), (uchar *) hash_2);
-
-    char hash_3[20];
-
-    int *a = (int *) hash_2;
-    int *b = (int *) hash_0;
-    int *c = (int *) hash_3;
-
-    int i;
-    for (i = 0; i < 5; i++)
+    if (connector->password_len > 0)
     {
-        c[i] = a[i] ^ b[i];
-    }
+        //auth-response
+        char hash_0[20];
+        bzero(hash_0, sizeof (hash_0));
+        php_swoole_sha1(connector->password, connector->password_len, (uchar *) hash_0);
 
-    *tmp = 20;
-    memcpy(tmp + 1, hash_3, 20);
-    tmp += 21;
+        char hash_1[20];
+        bzero(hash_1, sizeof (hash_1));
+        php_swoole_sha1(hash_0, sizeof (hash_0), (uchar *) hash_1);
+
+        char str[40];
+        memcpy(str, request.auth_plugin_data, 20);
+        memcpy(str + 20, hash_1, 20);
+
+        char hash_2[20];
+        php_swoole_sha1(str, sizeof (str), (uchar *) hash_2);
+
+        char hash_3[20];
+
+        int *a = (int *) hash_2;
+        int *b = (int *) hash_0;
+        int *c = (int *) hash_3;
+
+        int i;
+        for (i = 0; i < 5; i++)
+        {
+            c[i] = a[i] ^ b[i];
+        }
+
+        *tmp = 20;
+        memcpy(tmp + 1, hash_3, 20);
+        tmp += 21;
+    }
+    else
+    {
+         *tmp = 0;
+         tmp++;
+    }
 
     //string[NUL]    database
     memcpy(tmp, connector->database, connector->database_len);
@@ -573,7 +575,7 @@ static int mysql_handshake(mysql_connector *connector, char *buf, int len)
     return 1;
 }
 
-static int mysql_response(mysql_client *client)
+int mysql_response(mysql_client *client)
 {
     swString *buffer = client->buffer;
 
@@ -705,7 +707,7 @@ static int mysql_response(mysql_client *client)
 
 #ifdef SW_MYSQL_DEBUG
 
-static void mysql_client_info(mysql_client *client)
+void mysql_client_info(mysql_client *client)
 {
     printf("\n"SW_START_LINE"\nmysql_client\nbuffer->offset=%ld\nbuffer->length=%ld\nstatus=%d\n"
             "packet_length=%d\npacket_number=%d\n"
@@ -725,7 +727,7 @@ static void mysql_client_info(mysql_client *client)
     }
 }
 
-static void mysql_column_info(mysql_field *field)
+void mysql_column_info(mysql_field *field)
 {
     printf("\n"SW_START_LINE"\nname=%s, table=%s, db=%s\n"
             "name_length=%d, table_length=%d, db_length=%d\n"
@@ -1429,19 +1431,6 @@ static int swoole_mysql_onRead(swReactor *reactor, swEvent *event)
         }
     }
     return SW_OK;
-}
-
-static PHP_METHOD(swoole_mysql, getBuffer)
-{
-
-    mysql_client *client = swoole_get_object(getThis());
-    if (!client)
-    {
-        swoole_php_fatal_error(E_WARNING, "object is not instanceof swoole_mysql.");
-        RETURN_FALSE;
-    }
-
-    SW_RETURN_STRINGL(client->buffer->str, client->buffer->length, 1);//TODO zero malloc
 }
 
 #ifdef SW_USE_MYSQLND

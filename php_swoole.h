@@ -46,7 +46,7 @@
 #include "Client.h"
 #include "async.h"
 
-#define PHP_SWOOLE_VERSION  "1.9.9-alpha"
+#define PHP_SWOOLE_VERSION  "2.0.8"
 #define PHP_SWOOLE_CHECK_CALLBACK
 
 /**
@@ -138,6 +138,10 @@ extern swoole_object_array swoole_objects;
 #endif
 #endif
 
+#if PHP_MAJOR_VERSION == 5 && PHP_MINOR_VERSION < 5
+#error "require PHP version 5.5 or later."
+#endif
+
 #include "php7_wrapper.h"
 
 #define PHP_CLIENT_CALLBACK_NUM             4
@@ -192,6 +196,9 @@ enum php_swoole_server_callback_type
 typedef struct
 {
     zval *callbacks[PHP_SERVER_CALLBACK_NUM];
+#ifdef SW_COROUTINE
+    zend_fcall_info_cache *caches[PHP_SERVER_CALLBACK_NUM];
+#endif
 #if PHP_MAJOR_VERSION >= 7
     zval _callbacks[PHP_SERVER_CALLBACK_NUM];
 #endif
@@ -312,6 +319,7 @@ PHP_FUNCTION(swoole_async_close);
 PHP_FUNCTION(swoole_async_readfile);
 PHP_FUNCTION(swoole_async_writefile);
 PHP_FUNCTION(swoole_async_dns_lookup);
+PHP_FUNCTION(swoole_async_dns_lookup_coro);
 PHP_FUNCTION(swoole_async_set);
 //---------------------------------------------------------
 //                  swoole_timer
@@ -323,7 +331,6 @@ PHP_FUNCTION(swoole_timer_clear);
 //---------------------------------------------------------
 //                  other
 //---------------------------------------------------------
-PHP_FUNCTION(swoole_load_module);
 PHP_FUNCTION(swoole_strerror);
 PHP_FUNCTION(swoole_errno);
 //---------------------------------------------------------
@@ -341,6 +348,15 @@ void swoole_table_init(int module_number TSRMLS_DC);
 void swoole_lock_init(int module_number TSRMLS_DC);
 void swoole_atomic_init(int module_number TSRMLS_DC);
 void swoole_client_init(int module_number TSRMLS_DC);
+#ifdef SW_COROUTINE
+void swoole_client_coro_init(int module_number TSRMLS_DC);
+#ifdef SW_USE_REDIS
+void swoole_redis_coro_init(int module_number TSRMLS_DC);
+#endif
+void swoole_mysql_coro_init(int module_number TSRMLS_DC);
+void swoole_http_client_coro_init(int module_number TSRMLS_DC);
+void swoole_coroutine_util_init(int module_number TSRMLS_DC);
+#endif
 void swoole_http_client_init(int module_number TSRMLS_DC);
 #ifdef SW_USE_REDIS
 void swoole_redis_init(int module_number TSRMLS_DC);
@@ -354,7 +370,6 @@ void swoole_http2_client_init(int module_number TSRMLS_DC);
 void swoole_websocket_init(int module_number TSRMLS_DC);
 void swoole_buffer_init(int module_number TSRMLS_DC);
 void swoole_mysql_init(int module_number TSRMLS_DC);
-void swoole_module_init(int module_number TSRMLS_DC);
 void swoole_mmap_init(int module_number TSRMLS_DC);
 void swoole_channel_init(int module_number TSRMLS_DC);
 #if PHP_MAJOR_VERSION == 7
@@ -461,7 +476,6 @@ ZEND_BEGIN_MODULE_GLOBALS(swoole)
     zend_bool use_namespace;
     zend_bool fast_serialize;
     long socket_buffer_size;
-    char *modules;
 ZEND_END_MODULE_GLOBALS(swoole)
 
 extern ZEND_DECLARE_MODULE_GLOBALS(swoole);
